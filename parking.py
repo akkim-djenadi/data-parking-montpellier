@@ -93,8 +93,8 @@ else:
         full_df['Jour_Semaine'] = full_df['Date'].dt.dayofweek
         full_df['Mois_Annee'] = full_df['Date'].dt.to_period('M').astype(str)
         
-        tab1, tab2, tab3, tab4, tab5, tab6, tab_map, tab7 = st.tabs([
-            "📊 Vue globale", "🔥 Vitalité", "🔄 Rotation", "🔮 Simulation", "📅 Mensuel", "🕒 Heures", "📍 Carte", "📑 Rapport & Synthèse"
+        tab1, tab_live, tab2, tab3, tab4, tab5, tab6, tab_map, tab7 = st.tabs([
+            "📊 Vue globale", "⚡ Live", "🔥 Vitalité", "🔄 Rotation", "🔮 Simulation", "📅 Mensuel", "🕒 Heures", "📍 Carte", "📑 Rapport & Synthèse"
         ])
 
         with tab1:
@@ -110,13 +110,50 @@ else:
             fig.update_layout(legend=dict(orientation="h", y=-0.2), yaxis=dict(range=[0, 105]))
             st.plotly_chart(fig, use_container_width=True)
 
+        with tab_live:
+            st.subheader("⚡ État du réseau en temps réel")
+            st.markdown("Cette carte affiche l'occupation actuelle sans tenir compte des dates sélectionnées.")
+            try:
+                live_res = requests.get(f"{BASE_URL}/offstreetparking?limit=100").json()
+                live_data = []
+                for p in live_res:
+                    try:
+                        name = p.get('name', {}).get('value', 'Inconnu')
+                        free = p.get('availableSpotNumber', {}).get('value', 0)
+                        total = p.get('totalSpotNumber', {}).get('value', 0)
+                        if total > 0:
+                            occ_rate = ((total - free) / total) * 100
+                            lat = p.get('location', {}).get('value', {}).get('coordinates', [0,0])[1]
+                            lon = p.get('location', {}).get('value', {}).get('coordinates', [0,0])[0]
+                            
+                            status = "Fluide"
+                            if occ_rate >= 85: status = "Saturation"
+                            elif occ_rate >= 50: status = "Tension"
+                            
+                            live_data.append({
+                                'Parking': name, 'lat': lat, 'lon': lon,
+                                'Occupation Actuelle (%)': round(occ_rate, 1),
+                                'Places Libres': free, 'Etat': status
+                            })
+                    except: continue
+                
+                df_live = pd.DataFrame(live_data)
+                fig_live = px.scatter_mapbox(df_live, lat="lat", lon="lon", hover_name="Parking",
+                                            hover_data={"lat": False, "lon": False, "Occupation Actuelle (%)": True, "Places Libres": True},
+                                            color="Etat", color_discrete_map={"Saturation": "#FF0000", "Tension": "#FFA500", "Fluide": "#00FF00"},
+                                            zoom=12, height=600)
+                fig_live.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+                st.plotly_chart(fig_live, use_container_width=True)
+            except:
+                st.error("Impossible de récupérer les données en direct pour le moment.")
+
         with tab2:
             st.subheader("📈 Indice de Vitalité Commerciale")
             col_info, col_formule = st.columns([2, 1])
             with col_info:
                 st.markdown("**Qu'est-ce que l'Indice de Vitalité ?** Il permet d'identifier quand le quartier 'aspire' les visiteurs. Un score élevé indique un remplissage rapide sur une zone déjà sollicitée.")
             with col_formule:
-                st.info("**Méthodologie :** \n $Vitalité = Occupation (\%) \\times Flux \ Entrant$")
+                st.info("**Méthodologie :** \n $Vitalité = Occupation (%) \\times Flux \ Entrant$")
             
             full_df['Vitalité'] = full_df['Taux (%)'] * full_df['Flux Net'].clip(lower=0)
             nb_jours = (end_dt - start_dt).days
