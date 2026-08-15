@@ -33,8 +33,7 @@ st.markdown("""
     </style>
     """, unsafe_allow_html=True)
 
-BASE_URL = "https://portail-api-data.montpellier3m.fr/ngsi-ld/v1/entities?type=OffStreetParking&limit=1000
-"
+BASE_URL = "https://portail-api-data.montpellier.fr/ngsi-ld/v1/entities?type=OffStreetParking&limit=1000"
 DB_NAME = "usine_data_montpellier.db"
 
 # --- LOGIQUE BASE DE DONNÉES (L'ARCHIVEUR PATRIMONIAL) ---
