@@ -4,7 +4,7 @@ import sqlite3
 import pandas as pd
 from datetime import datetime
 
-BASE_URL = "https://portail-api-data.montpellier3m.fr"
+BASE_URL = "https://portail-api-data.montpellier.fr/ngsi-ld/v1"
 DB_NAME = "usine_data_montpellier.db"
 
 def recolter_donnees():
