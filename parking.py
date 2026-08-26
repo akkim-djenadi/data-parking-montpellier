@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import numpy as np
 import sqlite3
 from datetime import datetime, date, timedelta
-from sklearn.cluster import KMeans # NOUVEL IMPORT POUR LE CLUSTERING IA
+from sklearn.cluster import KMeans
 
 # --- CONFIGURATION ET IDENTITÉ ---
 st.set_page_config(page_title="Observatoire des Commerces - Usine à Data", layout="wide")
@@ -24,16 +24,17 @@ st.markdown("""
         background-color: #f0f2f6 !important;
         border-radius: 5px;
         padding: 5px 15px;
-        color: #31333F !important; /* Force le texte en sombre pour qu'il soit lisible sur le fond clair */
+        color: #31333F !important;
     }
     .stTabs [data-baseweb="tab"][aria-selected="true"] {
-        background-color: #FF4B4B !important; /* Met l'onglet actif en évidence (rouge) */
-        color: white !important; /* Texte en blanc pour l'onglet actif */
+        background-color: #FF4B4B !important;
+        color: white !important;
     }
     </style>
     """, unsafe_allow_html=True)
 
-BASE_URL = "https://portail-api-data.montpellier.fr/ngsi-ld/v1/entities?type=OffStreetParking&limit=1000"
+# URL de base corrigée et séparée
+API_BASE = "https://portail-api-data.montpellier.fr/ngsi-ld/v1"
 DB_NAME = "usine_data_montpellier.db"
 
 # --- LOGIQUE BASE DE DONNÉES (L'ARCHIVEUR PATRIMONIAL) ---
@@ -84,7 +85,7 @@ init_db()
 def get_all_parkings():
     """Liste tous les parkings disponibles avec leurs coordonnées GPS."""
     try:
-        url = f"{BASE_URL}/offstreetparking?limit=100"
+        url = f"{API_BASE}/entities?type=OffStreetParking&limit=1000"
         res = requests.get(url).json()
         return {p.get('name', {}).get('value', 'Inconnu'): {
             "id": p['id'], 
@@ -92,26 +93,55 @@ def get_all_parkings():
             "lat": p.get('location', {}).get('value', {}).get('coordinates', [0,0])[1],
             "lon": p.get('location', {}).get('value', {}).get('coordinates', [0,0])[0]
         } for p in res if 'totalSpotNumber' in p}
-    except Exception: return {}
+    except Exception: 
+        return {}
 
 def get_history_smart(p_id, p_name, start_date, end_date, total_spots):
-    """Logique hybride : Priorité à la DB locale, fallback sur l'API."""
+    """Logique hybride : Priorité à la DB locale, fallback sur l'API NGSI-LD."""
     df_local = get_from_db(p_id, start_date, end_date)
-    
+
     if df_local.empty:
-        url_hist = f"{BASE_URL}/parking_timeseries/{p_id}/attrs/availableSpotNumber"
-        params = {"fromDate": start_date.strftime("%Y-%m-%dT00:00:00"), 
-                  "toDate": end_date.strftime("%Y-%m-%dT23:59:59")}
+        # Construction de l'URL historique selon le standard NGSI-LD
+        url_hist = f"{API_BASE}/temporal/entities/{p_id}"
+        
+        # Paramètres temporels NGSI-LD
+        params = {
+            "timerel": "between",
+            "timeAt": start_date.strftime("%Y-%m-%dT00:00:00Z"),
+            "endTimeAt": end_date.strftime("%Y-%m-%dT23:59:59Z"),
+            "attrs": "availableSpotNumber"
+        }
+        
         try:
             res = requests.get(url_hist, params=params)
+            
             if res.status_code == 200:
                 data = res.json()
-                if 'index' in data and 'values' in data:
-                    df_api = pd.DataFrame({'Date': pd.to_datetime(data['index']), 'Libres': data['values']})
-                    save_to_db(df_api, p_id, p_name, total_spots)
-                    df_api['Capacité'] = total_spots
-                    return df_api
-        except: pass
+                
+                # Vérification de la structure retournée (Fiware NGSI-LD standard)
+                if 'availableSpotNumber' in data and isinstance(data['availableSpotNumber'], list):
+                    records = []
+                    for entry in data['availableSpotNumber']:
+                        if 'value' in entry and 'observedAt' in entry:
+                            records.append({
+                                'Date': pd.to_datetime(entry['observedAt']),
+                                'Libres': entry['value']
+                            })
+                    
+                    df_api = pd.DataFrame(records)
+                    
+                    if not df_api.empty:
+                        save_to_db(df_api, p_id, p_name, total_spots)
+                        df_api['Capacité'] = total_spots
+                        return df_api
+                else:
+                    st.warning(f"Format de données inattendu pour {p_name}.")
+            else:
+                st.error(f"Erreur API ({res.status_code}) pour {p_name}. L'historique n'a pas pu être récupéré.")
+        
+        except Exception as e: 
+            st.error(f"Erreur de connexion pour {p_name} : {e}")
+            
     return df_local
 
 # --- INTERFACE UTILISATEUR ---
@@ -127,6 +157,13 @@ with st.expander("ℹ️ À propos de cet outil et utilité stratégique", expan
 # --- BARRE LATÉRALE DE CONTRÔLE ---
 st.sidebar.header("⚙️ Configuration de l'Usine")
 d_range = st.sidebar.date_input("Fenêtre de données historiques", [date.today() - timedelta(days=30), date.today()])
+
+# Correction Sécurité Date : empêche le script de planter si l'utilisateur n'a cliqué que sur une seule date
+if len(d_range) != 2:
+    st.sidebar.warning("Veuillez sélectionner une date de début et une date de fin pour lancer l'usine.")
+    st.stop()
+
+start_dt, end_dt = d_range
 
 parkings_dict = get_all_parkings()
 noms_parkings = sorted(parkings_dict.keys())
@@ -151,7 +188,6 @@ if not choix:
             st.rerun()
 else:
     # --- TRAITEMENT DES DONNÉES ---
-    start_dt, end_dt = d_range
     with st.spinner('Extraction et calcul des flux...'):
         all_data = []
         for name in choix:
@@ -164,14 +200,14 @@ else:
                 df['Taux (%)'] = (df['Occupées'] / df['Capacité']) * 100
                 df['Flux Net'] = df['Occupées'].diff().fillna(0)
                 all_data.append(df)
-    
+
     if all_data:
         full_df = pd.concat(all_data).reset_index(drop=True)
         full_df['Heure'] = full_df['Date'].dt.hour
         full_df['Nom_Jour'] = full_df['Date'].dt.day_name().map({'Monday':'Lundi','Tuesday':'Mardi','Wednesday':'Mercredi','Thursday':'Jeudi','Friday':'Vendredi','Saturday':'Samedi','Sunday':'Dimanche'})
         full_df['Mois_Annee'] = full_df['Date'].dt.to_period('M').astype(str)
         full_df['Date_Seule'] = full_df['Date'].dt.date
-        
+
         # --- CRÉATION DES ONGLETS (STRUCTURE À 13 ONGLETS) ---
         tabs = st.tabs([
             "📊 Vue globale", "🔮 Prévisions", "🚨 Anomalies", "🧠 Profilage IA", "⚡ Live", 
@@ -184,12 +220,12 @@ else:
             st.subheader("État général de la fréquentation")
             total_df = full_df.groupby('Date').agg({'Occupées': 'sum', 'Capacité': 'sum'}).reset_index()
             total_df['Taux (%)'] = (total_df['Occupées'] / total_df['Capacité']) * 100
-            
+
             c1, c2, c3 = st.columns(3)
             c1.metric("Occupation Moyenne", f"{total_df['Taux (%)'].mean():.1f} %")
             c2.metric("Pic de Tension", f"{total_df['Taux (%)'].max():.1f} %")
             c3.metric("Capacité Totale", int(total_df['Capacité'].max()))
-            
+
             fig = px.line(full_df if len(choix) > 1 else total_df, x='Date', y='Taux (%)', 
                           color='Parking' if len(choix) > 1 else None, height=600)
             fig.add_hline(y=85, line_dash="dash", line_color="red", annotation_text="Saturation (85%)")
@@ -202,18 +238,21 @@ else:
             st.markdown("Basé sur les profils historiques enregistrés dans votre base de données.")
             p_pred = st.selectbox("Etablissement à prédire :", choix, key="pred_box")
             df_pred = full_df[full_df['Parking'] == p_pred].copy()
-            
+
             if len(df_pred) < 168:
-                st.warning("Historique insuffisant pour une prévision IA. Continuez à utiliser l'usine.")
+                st.warning("Historique insuffisant pour une prévision IA fiable. L'algorithme nécessite une base saine (Continuez à utiliser l'usine).")
             else:
                 profile = df_pred.groupby(['Nom_Jour', 'Heure'])['Taux (%)'].mean().reset_index()
                 future_times = [df_pred['Date'].max() + timedelta(hours=i) for i in range(1, 7)]
                 preds = []
                 for ft in future_times:
                     day = ft.strftime('%A').replace('Monday','Lundi').replace('Tuesday','Mardi').replace('Wednesday','Mercredi').replace('Thursday','Jeudi').replace('Friday','Vendredi').replace('Saturday','Samedi').replace('Sunday','Dimanche')
-                    val = profile[(profile['Nom_Jour'] == day) & (profile['Heure'] == ft.hour)]['Taux (%)'].values[0]
+                    try:
+                        val = profile[(profile['Nom_Jour'] == day) & (profile['Heure'] == ft.hour)]['Taux (%)'].values[0]
+                    except:
+                        val = df_pred['Taux (%)'].mean()
                     preds.append(val)
-                
+
                 fig_p = go.Figure()
                 recent = df_pred.tail(24)
                 fig_p.add_trace(go.Scatter(x=recent['Date'], y=recent['Taux (%)'], name="Passé Récent", line=dict(color="#3498db", width=3)))
@@ -225,9 +264,7 @@ else:
         # 3. ANOMALIES (DÉTECTEUR DE SIGNAUX FAIBLES)
         with tabs[2]:
             st.subheader("🚨 Détecteur d'Anomalies & Signaux Faibles")
-            st.markdown("""
-            L'algorithme compare le flux actuel avec la moyenne historique du même jour de la semaine et de la même heure.
-            """)
+            st.markdown("""L'algorithme compare le flux actuel avec la moyenne historique du même jour de la semaine et de la même heure.""")
             st.info("💡 **Alerte intelligente :** L'usine lève une alerte si l'écart avec la tendance normale dépasse **20%**.")
 
             p_anom = st.selectbox("Sélectionnez l'établissement à analyser :", choix, key="anom_box")
@@ -256,49 +293,40 @@ else:
             else:
                 st.warning("Historique insuffisant pour établir une tendance normale. L'usine doit accumuler plus de données.")
 
-        # 4. PROFILAGE IA (CLUSTERING) - NOUVEAU MODULE
+        # 4. PROFILAGE IA (CLUSTERING)
         with tabs[3]:
             st.subheader("🧠 Profilage IA & Comportemental")
-            st.markdown("""
-            L'intelligence artificielle analyse la signature horaire de chaque établissement pour les regrouper automatiquement 
-            par profils d'usage (K-Means Clustering). Utile pour comprendre la nature de la zone (Bureaux, Loisirs, Shopping).
-            """)
-            
+            st.markdown("""L'intelligence artificielle analyse la signature horaire de chaque établissement pour les regrouper automatiquement par profils d'usage (K-Means Clustering). Utile pour comprendre la nature de la zone (Bureaux, Loisirs, Shopping).""")
+
             if len(choix) < 3:
                 st.warning("⚠️ Sélectionnez au moins 3 parkings dans le menu pour permettre à l'IA de créer des groupes pertinents.")
             else:
-                # Préparation des données pour l'IA (profil moyen par parking et par heure)
                 profil_horaire = full_df.groupby(['Parking', 'Heure'])['Taux (%)'].mean().unstack().fillna(0)
-                
-                # Clustering K-Means
-                n_clusters = min(3, len(choix)) # On crée jusqu'à 3 groupes
+                n_clusters = min(3, len(choix))
                 kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                 profil_horaire['Cluster'] = kmeans.fit_predict(profil_horaire)
-                
-                # Analyse et Nommage automatique des clusters
+
                 cluster_info = []
                 for c in range(n_clusters):
                     cluster_data = profil_horaire[profil_horaire['Cluster'] == c].drop(columns='Cluster')
                     mean_profile = cluster_data.mean()
                     peak_hour = mean_profile.idxmax()
                     
-                    # Logique experte de nommage selon le pic
                     if 6 <= peak_hour < 12: nom_profil = "Bureaux / Matinée"
                     elif 12 <= peak_hour < 15: nom_profil = "Restauration / Pause Midi"
                     elif 15 <= peak_hour < 19: nom_profil = "Shopping / Après-midi"
                     else: nom_profil = "Nocturne / Loisirs"
-                    
+
                     cluster_info.append({
                         'Cluster': c,
                         'Nom': f"Profil '{nom_profil}' (Pic à {peak_hour}h)",
                         'Parkings': cluster_data.index.tolist(),
                         'Profil': mean_profile
                     })
-                
-                # Visualisation des profils IA
+
                 fig_cluster = go.Figure()
                 colors = ['#3498db', '#e67e22', '#2ecc71']
-                
+
                 for idx, c_info in enumerate(cluster_info):
                     fig_cluster.add_trace(go.Scatter(
                         x=c_info['Profil'].index, 
@@ -308,8 +336,7 @@ else:
                     ))
                 fig_cluster.update_layout(height=400, yaxis_title="Occupation Moyenne (%)", xaxis_title="Heure de la journée")
                 st.plotly_chart(fig_cluster, use_container_width=True)
-                
-                # Affichage de la répartition
+
                 st.markdown("#### Répartition des établissements par ADN d'usage :")
                 cols = st.columns(n_clusters)
                 for idx, c_info in enumerate(cluster_info):
@@ -322,7 +349,8 @@ else:
         with tabs[4]:
             st.subheader("⚡ État du réseau en temps réel")
             try:
-                live_res = requests.get(f"{BASE_URL}/offstreetparking?limit=100").json()
+                # Correction URL Live NGSI-LD
+                live_res = requests.get(f"{API_BASE}/entities?type=OffStreetParking&limit=1000").json()
                 live_data = []
                 for p in live_res:
                     free = p.get('availableSpotNumber', {}).get('value', 0)
@@ -341,7 +369,8 @@ else:
                                             zoom=12, height=600)
                 fig_live.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
                 st.plotly_chart(fig_live, use_container_width=True)
-            except: st.error("Erreur Live API.")
+            except Exception as e: 
+                st.error(f"Erreur Live API: {e}")
 
         # 6. VITALITÉ
         with tabs[5]:
@@ -387,7 +416,7 @@ else:
         with tabs[8]:
             st.subheader("📅 Comparaison Mensuelle")
             liste_m = sorted(full_df['Mois_Annee'].unique())
-            m_sel = st.multiselect("Mois à comparer :", liste_m, default=liste_m[-2:])
+            m_sel = st.multiselect("Mois à comparer :", liste_m, default=liste_m[-2:] if len(liste_m)>=2 else liste_m)
             if m_sel:
                 df_m = full_df[full_df['Mois_Annee'].isin(m_sel)]
                 st.plotly_chart(px.bar(df_m.groupby(['Mois_Annee','Parking'])['Taux (%)'].mean().reset_index(), x='Mois_Annee', y='Taux (%)', color='Parking', barmode='group'), use_container_width=True)
@@ -420,29 +449,30 @@ else:
             idx_max = full_df['Taux (%)'].idxmax()
             peak_row = full_df.loc[idx_max]
             if isinstance(peak_row, pd.DataFrame): peak_row = peak_row.iloc[0]
-            
+
             st.markdown(f"""
             ### 📝 Note de Synthèse Stratégique
             * **Occupation moyenne de la zone** : {avg_tot:.1f}%
             * **Pic d'affluence record** : Le {pd.to_datetime(peak_row['Date']).strftime('%d/%m/%Y à %H:%M')}
             * **Établissement le plus sollicité** : {full_df.groupby('Parking')['Taux (%)'].mean().idxmax()}
             """)
-            
+
             if nb_jours >= 14:
                 st.write("---")
                 st.subheader("📅 Évolution quotidienne (Tendances longues)")
                 daily_trend = full_df.groupby(['Date_Seule', 'Parking'])['Taux (%)'].mean().reset_index()
                 st.plotly_chart(px.line(daily_trend, x='Date_Seule', y='Taux (%)', color='Parking'), use_container_width=True)
-                
+
                 st.subheader("📈 Profils types : Mercredi, Samedi & Dimanche")
                 df_keys = full_df[full_df['Nom_Jour'].isin(['Mercredi', 'Samedi', 'Dimanche'])]
                 keys_trend = df_keys.groupby(['Heure', 'Nom_Jour', 'Parking'])['Taux (%)'].mean().reset_index()
                 for p_name in choix:
                     st.plotly_chart(px.line(keys_trend[keys_trend['Parking']==p_name], x='Heure', y='Taux (%)', color='Nom_Jour', title=f"Profils Jours Clés : {p_name}"), use_container_width=True)
-            
+
             st.write("---")
             col_dl1, col_dl2 = st.columns(2)
-            with col_dl1: st.download_button("📥 Télécharger Historique Quotidien", daily_trend.to_csv(index=False).encode('utf-8'), "historique_quotidien.csv")
+            if nb_jours >= 14:
+                with col_dl1: st.download_button("📥 Télécharger Historique Quotidien", daily_trend.to_csv(index=False).encode('utf-8'), "historique_quotidien.csv")
             with col_dl2: st.download_button("📥 Télécharger Données Brutes", full_df.to_csv(index=False).encode('utf-8'), "donnees_brutes.csv")
 
         # 13. CENTRE D'ARCHIVES
@@ -453,7 +483,7 @@ else:
             st.info("💡 Vous pouvez télécharger ici l'intégralité de la base accumulée (par exemple pour exporter 6 mois de données d'un coup).")
             st.download_button("📥 Exporter la base SQLite complète (CSV)", full_archive.to_csv(index=False).encode('utf-8'), "archive_globale_usine.csv")
 
-    else: st.error("Aucune donnée.")
+    else: st.error("Aucune donnée disponible. Ajustez vos dates ou relancez le traitement.")
 
 # --- FOOTER ---
 st.markdown("---")
