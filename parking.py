@@ -115,7 +115,8 @@ def get_history_smart(p_id, p_name, start_date, end_date, total_spots):
         try:
             res = requests.get(url_hist, params=params)
             
-            if res.status_code == 200:
+           # On accepte le 200 (Succès complet) et le 206 (Succès partiel / Pagination API)
+            if res.status_code in [200, 206]:
                 data = res.json()
                 
                 # Vérification de la structure retournée (Fiware NGSI-LD standard)
