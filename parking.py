@@ -432,15 +432,36 @@ else:
             st.subheader("📍 Cartographie Dynamique des Flux")
             map_data = []
             for name in choix:
-                p_info = parkings_dict[name]
-                avg_occ = full_df[full_df['Parking'] == name]['Taux (%)'].mean()
-                status = "Saturation" if avg_occ>=85 else "Tension" if avg_occ>=50 else "Fluide"
-                map_data.append({'Parking': name, 'lat': p_info['lat'], 'lon': p_info['lon'], 'Occupation (%)': round(avg_occ, 1), 'Etat': status})
-            fig_map = px.scatter_mapbox(pd.DataFrame(map_data), lat="lat", lon="lon", hover_name="Parking", 
-                                        hover_data={"lat": False, "lon": False, "Occupation (%)": True}, color="Etat",
-                                        color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, zoom=12, height=500)
-            fig_map.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
-            st.plotly_chart(fig_map, use_container_width=True)
+                if name in parkings_dict:
+                    p_info = parkings_dict[name]
+                    # On isole les données de ce parking spécifique
+                    df_parking = full_df[full_df['Parking'] == name]
+                    
+                    # On s'assure qu'il y a bien des données avant de calculer
+                    if not df_parking.empty:
+                        avg_occ = df_parking['Taux (%)'].mean()
+                        # Sécurisation supplémentaire contre les NaN (Not a Number)
+                        if pd.notna(avg_occ):
+                            status = "Saturation" if avg_occ >= 85 else "Tension" if avg_occ >= 50 else "Fluide"
+                            map_data.append({
+                                'Parking': name, 
+                                'lat': p_info['lat'], 
+                                'lon': p_info['lon'], 
+                                'Occupation (%)': round(avg_occ, 1), 
+                                'Etat': status
+                            })
+            
+            df_map = pd.DataFrame(map_data)
+            
+            # Le bouclier anti-crash : on ne dessine la carte que si df_map n'est pas vide
+            if not df_map.empty and 'lat' in df_map.columns:
+                fig_map = px.scatter_mapbox(df_map, lat="lat", lon="lon", hover_name="Parking", 
+                                            hover_data={"lat": False, "lon": False, "Occupation (%)": True}, color="Etat",
+                                            color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, zoom=12, height=500)
+                fig_map.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+                st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.info("🗺️ Aucune coordonnée ou donnée d'occupation suffisante pour générer la carte sur cette sélection.")
 
         # 12. RAPPORT & SYNTHÈSE
         with tabs[11]:
