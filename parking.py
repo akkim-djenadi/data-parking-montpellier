@@ -115,18 +115,31 @@ def get_history_smart(p_id, p_name, start_date, end_date, total_spots):
         try:
             res = requests.get(url_hist, params=params)
             
-           # On accepte le 200 (Succès complet) et le 206 (Succès partiel / Pagination API)
             if res.status_code in [200, 206]:
                 data = res.json()
                 
-                # Vérification de la structure retournée (Fiware NGSI-LD standard)
-                if 'availableSpotNumber' in data and isinstance(data['availableSpotNumber'], list):
+                # 1. L'API ne renvoie pas la clé si elle n'a pas d'historique
+                if 'availableSpotNumber' not in data:
+                    st.warning(f"L'API ne possède plus de données pour {p_name} à ces dates.")
+                    return df_local
+
+                spots_data = data['availableSpotNumber']
+                
+                # 2. Si l'API renvoie un seul point, ce n'est pas une liste mais un dict. On le force en liste.
+                if isinstance(spots_data, dict):
+                    spots_data = [spots_data]
+
+                # 3. Extraction sécurisée
+                if isinstance(spots_data, list):
                     records = []
-                    for entry in data['availableSpotNumber']:
-                        if 'value' in entry and 'observedAt' in entry:
+                    for entry in spots_data:
+                        val = entry.get('value')
+                        obs_at = entry.get('observedAt')
+                        
+                        if val is not None and obs_at is not None:
                             records.append({
-                                'Date': pd.to_datetime(entry['observedAt']),
-                                'Libres': entry['value']
+                                'Date': pd.to_datetime(obs_at),
+                                'Libres': val
                             })
                     
                     df_api = pd.DataFrame(records)
@@ -135,8 +148,13 @@ def get_history_smart(p_id, p_name, start_date, end_date, total_spots):
                         save_to_db(df_api, p_id, p_name, total_spots)
                         df_api['Capacité'] = total_spots
                         return df_api
+                    else:
+                        st.warning(f"Données vides pour {p_name} (capteur potentiellement inactif).")
                 else:
                     st.warning(f"Format de données inattendu pour {p_name}.")
+                    # Mode Debug : affiche la donnée brute pour comprendre ce qui cloche
+                    with st.expander("Voir les données brutes de l'API (Debug)"):
+                        st.json(data)
             else:
                 st.error(f"Erreur API ({res.status_code}) pour {p_name}. L'historique n'a pas pu être récupéré.")
         
