@@ -276,7 +276,7 @@ else:
                 recent = df_pred.tail(24)
                 fig_p.add_trace(go.Scatter(x=recent['Date'], y=recent['Taux (%)'], name="Passé Récent", line=dict(color="#3498db", width=3)))
                 fig_p.add_trace(go.Scatter(x=[recent['Date'].iloc[-1]] + future_times, y=[recent['Taux (%)'].iloc[-1]] + preds, 
-                                          name="Prévision IA", line=dict(color="#e67e22", width=3, dash='dash')))
+                                            name="Prévision IA", line=dict(color="#e67e22", width=3, dash='dash')))
                 fig_p.add_hline(y=85, line_dash="dot", line_color="red")
                 st.plotly_chart(fig_p, use_container_width=True)
 
@@ -383,10 +383,10 @@ else:
                             'Occupation Actuelle (%)': round(occ, 1),
                             'Etat': "Saturation" if occ >= 85 else "Tension" if occ >= 50 else "Fluide"
                         })
-                fig_live = px.scatter_mapbox(pd.DataFrame(live_data), lat="lat", lon="lon", hover_name="Parking", 
-                                            color="Etat", color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, 
-                                            zoom=12, height=600)
-                fig_live.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+                fig_live = px.scatter_map(pd.DataFrame(live_data), lat="lat", lon="lon", hover_name="Parking", 
+                                          color="Etat", color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, 
+                                          zoom=12, height=600)
+                fig_live.update_layout(map_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
                 st.plotly_chart(fig_live, use_container_width=True)
             except Exception as e: 
                 st.error(f"Erreur Live API: {e}")
@@ -477,14 +477,14 @@ else:
             # Double vérification avant d'appeler Plotly
             if not df_map.empty and len(df_map) > 0:
                 try:
-                    fig_map = px.scatter_mapbox(
+                    fig_map = px.scatter_map(
                         df_map, lat="lat", lon="lon", hover_name="Parking", 
                         hover_data={"lat": False, "lon": False, "Occupation (%)": True}, 
                         color="Etat",
                         color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, 
                         zoom=12, height=500
                     )
-                    fig_map.update_layout(mapbox_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
+                    fig_map.update_layout(map_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
                     st.plotly_chart(fig_map, use_container_width=True)
                 except Exception as e:
                     # Si Plotly échoue quand même, l'appli ne plantera plus, elle affichera ce message
