@@ -385,7 +385,7 @@ else:
                         })
                 fig_live = px.scatter_map(pd.DataFrame(live_data), lat="lat", lon="lon", hover_name="Parking", 
                                           color="Etat", color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, 
-                                          zoom=12, height=600)
+                                          center={"lat": 43.6107, "lon": 3.8767}, zoom=12.5, height=600)
                 fig_live.update_layout(map_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
                 st.plotly_chart(fig_live, use_container_width=True)
             except Exception as e: 
@@ -482,7 +482,7 @@ else:
                         hover_data={"lat": False, "lon": False, "Occupation (%)": True}, 
                         color="Etat",
                         color_discrete_map={"Saturation":"red","Tension":"orange","Fluide":"green"}, 
-                        zoom=12, height=500
+                        center={"lat": 43.6107, "lon": 3.8767}, zoom=12.5, height=500
                     )
                     fig_map.update_layout(map_style="carto-positron", margin={"r":0,"t":0,"l":0,"b":0})
                     st.plotly_chart(fig_map, use_container_width=True)
